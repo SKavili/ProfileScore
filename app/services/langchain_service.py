@@ -7,12 +7,12 @@ import uuid
 import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
-from langchain.llms import HuggingFacePipeline
+from langchain_community.llms import HuggingFacePipeline
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import Pinecone as LangchainPinecone
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import Pinecone as LangchainPinecone
 from langchain.schema import Document
 from langchain.tools import Tool
 from langchain.agents import initialize_agent, AgentType

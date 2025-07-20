@@ -56,14 +56,16 @@ class LLaMAService:
             if self.tokenizer.pad_token is None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
             
-            # Load model
+            # Load model with memory optimization
             self.logger.info("Loading model...")
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_id,
                 torch_dtype=torch.float16,
                 device_map="auto",
                 use_auth_token=token,
-                trust_remote_code=True
+                trust_remote_code=True,
+                low_cpu_mem_usage=True,
+                load_in_8bit=True  # Enable 8-bit quantization for memory efficiency
             )
             
             # Create pipeline

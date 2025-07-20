@@ -17,12 +17,14 @@ from app.models import (
     CandidateData,
     JobData,
     CandidateSearchRequest,
-    CandidateSearchResponse
+    CandidateSearchResponse,
+    ScoringResult
 )
 from app.services.llama_service import llama_service
 from app.services.pinecone_service import pinecone_service
 from app.services.langchain_service import langchain_service
 from app.utils.logger import get_logger
+from app.utils.config import config_validator
 from app import __version__
 
 
@@ -35,6 +37,21 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager for startup and shutdown events."""
     # Startup
     logger.info("Starting ProfileScore application...")
+    
+    # Validate configuration
+    logger.info("Validating configuration...")
+    required_validation = config_validator.validate_required_env_vars()
+    optional_validation = config_validator.validate_optional_env_vars()
+    
+    # Check if critical services can be initialized
+    critical_services_available = all([
+        required_validation.get("HUGGINGFACE_TOKEN", False),
+        required_validation.get("PINECONE_API_KEY", False),
+        required_validation.get("PINECONE_ENVIRONMENT", False)
+    ])
+    
+    if not critical_services_available:
+        logger.error("Critical environment variables missing. Application may not function properly.")
     
     # Load the LLaMA 2 model
     logger.info("Loading LLaMA 2 model...")
@@ -113,8 +130,22 @@ async def root():
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint."""
+    # Determine overall status
+    services_healthy = [
+        llama_service.is_loaded,
+        pinecone_service.is_connected,
+        langchain_service.is_initialized
+    ]
+    
+    if all(services_healthy):
+        status = "healthy"
+    elif any(services_healthy):
+        status = "degraded"
+    else:
+        status = "unhealthy"
+    
     return HealthResponse(
-        status="healthy" if llama_service.is_loaded else "degraded",
+        status=status,
         version=__version__,
         model_loaded=llama_service.is_loaded,
         pinecone_connected=pinecone_service.is_connected
@@ -594,6 +625,30 @@ async def get_model_info():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get model information: {str(e)}"
+        )
+
+
+@app.get("/config", response_model=dict)
+async def get_configuration():
+    """Get current application configuration (without sensitive data)."""
+    try:
+        config_summary = config_validator.get_config_summary()
+        
+        # Remove sensitive information
+        if "pinecone" in config_summary:
+            config_summary["pinecone"]["api_key_set"] = bool(config_summary["pinecone"].get("api_key_set"))
+            config_summary["pinecone"]["environment"] = "***" if config_summary["pinecone"].get("environment") else None
+        
+        if "huggingface" in config_summary:
+            config_summary["huggingface"]["token_set"] = bool(config_summary["huggingface"].get("token_set"))
+        
+        return config_summary
+        
+    except Exception as e:
+        logger.error(f"Failed to get configuration: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get configuration: {str(e)}"
         )
 
 
