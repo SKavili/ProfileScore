@@ -6,7 +6,7 @@ import os
 import re
 import torch
 from typing import Optional, Tuple, Dict, Any
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
 from loguru import logger
 
 from app.utils.logger import get_logger
@@ -56,16 +56,43 @@ class LLaMAService:
             if self.tokenizer.pad_token is None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
             
+            # Configure quantization if GPU is available and bitsandbytes supports it
+            quantization_config = None
+            device_map = "auto"
+            
+            if torch.cuda.is_available():
+                try:
+                    # Try to use 8-bit quantization with proper BitsAndBytesConfig
+                    quantization_config = BitsAndBytesConfig(
+                        load_in_8bit=True,
+                        llm_int8_threshold=6.0,
+                        llm_int8_has_fp16_weight=False,
+                    )
+                    self.logger.info("Using 8-bit quantization for GPU")
+                except Exception as e:
+                    self.logger.warning(f"8-bit quantization not available: {e}")
+                    # Fall back to 16-bit precision
+                    quantization_config = None
+            else:
+                self.logger.info("CUDA not available, using CPU")
+                device_map = "cpu"
+            
             # Load model with memory optimization
             self.logger.info("Loading model...")
+            model_kwargs = {
+                "torch_dtype": torch.float16 if torch.cuda.is_available() else torch.float32,
+                "device_map": device_map,
+                "use_auth_token": token,
+                "trust_remote_code": True,
+                "low_cpu_mem_usage": True,
+            }
+            
+            if quantization_config:
+                model_kwargs["quantization_config"] = quantization_config
+            
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_id,
-                torch_dtype=torch.float16,
-                device_map="auto",
-                use_auth_token=token,
-                trust_remote_code=True,
-                low_cpu_mem_usage=True,
-                load_in_8bit=True  # Enable 8-bit quantization for memory efficiency
+                **model_kwargs
             )
             
             # Create pipeline
@@ -74,7 +101,7 @@ class LLaMAService:
                 "text-generation",
                 model=self.model,
                 tokenizer=self.tokenizer,
-                device_map="auto"
+                device_map=device_map
             )
             
             self.is_loaded = True
@@ -223,13 +250,55 @@ Confidence: [0.0-1.0] [/INST]"""
         Returns:
             Dict containing model information
         """
-        return {
-            "model_id": self.model_id,
-            "is_loaded": self.is_loaded,
-            "device": str(self.model.device) if self.model else None,
-            "dtype": str(self.model.dtype) if self.model else None,
-            "parameters": sum(p.numel() for p in self.model.parameters()) if self.model else 0
-        }
+        try:
+            device_info = None
+            dtype_info = None
+            param_count = 0
+            
+            if self.model:
+                # Safely get device information
+                try:
+                    if hasattr(self.model, 'device'):
+                        device_info = str(self.model.device)
+                    elif hasattr(self.model, 'hf_device_map'):
+                        device_info = str(self.model.hf_device_map)
+                    else:
+                        device_info = "unknown"
+                except Exception:
+                    device_info = "unknown"
+                
+                # Safely get dtype information
+                try:
+                    if hasattr(self.model, 'dtype'):
+                        dtype_info = str(self.model.dtype)
+                    else:
+                        dtype_info = "unknown"
+                except Exception:
+                    dtype_info = "unknown"
+                
+                # Safely get parameter count
+                try:
+                    param_count = sum(p.numel() for p in self.model.parameters())
+                except Exception:
+                    param_count = 0
+            
+            return {
+                "model_id": self.model_id,
+                "is_loaded": self.is_loaded,
+                "device": device_info,
+                "dtype": dtype_info,
+                "parameters": param_count
+            }
+        except Exception as e:
+            self.logger.error(f"Failed to get model info: {str(e)}")
+            return {
+                "model_id": self.model_id,
+                "is_loaded": self.is_loaded,
+                "device": "unknown",
+                "dtype": "unknown",
+                "parameters": 0,
+                "error": str(e)
+            }
     
     def unload_model(self) -> None:
         """Unload the model to free memory."""
